@@ -72,12 +72,14 @@ def save_report(a: Analysis, output: Path, *, input_path: str, options: dict) ->
     discrepancy[a.cleaned & ~a.reconstruction] = [220, 44, 69]
     discrepancy[a.reconstruction & ~a.cleaned] = [38, 99, 235]
     stages["difference"] = discrepancy
+    stages["trajectories"] = stages["skeleton"]
     for name, arr in stages.items():
         save_image(output / f"{name}.png", arr)
     (output / "graph.svg").write_text(svg_graph(a), encoding="utf-8")
     manifest = {"schema_version": "0.1-prototype", "source_path": str(input_path),
                 "options": options, "diagnostics": a.diagnostics,
                 "components": a.components, "nodes": a.nodes, "edges": a.edges,
+                "junctions": a.junctions, "paths": a.paths,
                 "stage_files": {name: f"{name}.png" for name in stages},
                 "graph_file": "graph.svg"}
     (output / "run.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -104,6 +106,7 @@ label{font-size:13px;color:#b8c6d7}input[type=range]{padding:0}
 .layout{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:18px}
 .view{position:relative;background:#fff;border-radius:8px;overflow:auto;min-height:180px;max-height:75vh}
 canvas{display:block;width:100%;height:auto;image-rendering:auto}
+.view #graph{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
 .view svg{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
 aside{background:#1b2431;border:1px solid #334152;border-radius:8px;padding:15px;max-height:75vh;overflow:auto}
 aside h2{font-size:16px;margin-top:0}.metric{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #344054;font-size:13px}
@@ -117,6 +120,8 @@ footer{margin-top:15px;font-size:12px;color:#a7b1bf}
 <div class="controls"><label>Stage <select id="stage"></select></label>
 <label>Overlay opacity <input id="opacity" type="range" min="0" max="100" value="80"></label>
 <label><input id="nodes" type="checkbox" checked> Graph annotations</label>
+<label>Junction <select id="junction"></select></label>
+<label>Pairing <select id="pairing"></select></label>
 <button id="previous">Previous</button><button id="next">Next</button>
 <button id="download">Download graph JSON</button>
 </div>
@@ -126,11 +131,13 @@ footer{margin-top:15px;font-size:12px;color:#a7b1bf}
 <span class="dot" style="background:#ef4444"></span>junction<br>
 <span class="dot" style="background:#2563eb"></span>unambiguous segment
 <span class="dot" style="background:#f59e0b"></span>junction-adjacent segment</div>
+<h2>Junction hypothesis</h2><pre id="hypothesis">Choose a junction and pairing.</pre>
+<h2>Candidate paths</h2><pre id="paths"></pre>
 <h2>Selected pixel</h2><pre id="pixel">Click the image to inspect a pixel coordinate.</pre></aside></div>
 <footer>Generated locally, with all assets embedded. Space/arrow keys change stages. The graph is an undirected topology hypothesis, not a stroke-order reconstruction.</footer>
 <script>
 const data = """ + payload + """;
-const stages = ['source','grayscale','threshold','cleaned','distance','components','skeleton','graph','reconstruction','difference'];
+const stages = ['source','grayscale','threshold','cleaned','distance','components','skeleton','graph','trajectories','reconstruction','difference'];
 const notes = {
 source:'Original rescaled color image; check rotation, perspective and lighting.',
 grayscale:'Luminance image; preserve source for later paper/ink color modeling.',
@@ -140,6 +147,7 @@ distance:'Approximate chamfer distance of ink to background, shown as a heatmap.
 components:'Cleaned ink over source. Components are contiguous ink regions, not necessarily characters.',
 skeleton:'Zhang–Suen pixel centerlines in red. Examine gaps, spurs, junctions and changes in topology.',
 graph:'Compressed centerline graph; red junctions / green endpoints, gold edges touch uncertain junctions.',
+trajectories:'Local junction hypotheses: select a junction and ranked alternative to compare port pairings and global path partitions. Colors denote candidate paths, not order or direction.',
 reconstruction:'Centerline candidates rendered with locally estimated width. This is an approximation, not recovered pen pressure or true dynamics.',
 difference:'Difference against cleaned ink: red marks missed ink; blue marks excess reconstructed ink. The IoU metric measures pixel overlap.'
 };
@@ -148,14 +156,79 @@ for(let i=0;i<stages.length;i++){const opt=document.createElement('option');opt.
 const sources={};for(const [k,url] of Object.entries(data.images)){const image=new Image();image.src=url;sources[k]=image;image.onload=draw}
 const svgMarkup = data.graph.replace('<svg ','<svg id="overlay-svg" ');
 graph.innerHTML=svgMarkup;
+const originalSvg=graph.querySelector('svg');
+const trajectorySvg=originalSvg.cloneNode(false);
+trajectorySvg.id='trajectory-svg';trajectorySvg.style.position='absolute';
+trajectorySvg.style.left='0';trajectorySvg.style.top='0';trajectorySvg.style.width='100%';trajectorySvg.style.height='100%';
+graph.append(trajectorySvg);
+const jSelect=document.getElementById('junction'),pSelect=document.getElementById('pairing');
+const palette=['#2563eb','#c026d3','#0891b2','#ea580c','#65a30d','#db2777','#0f766e'];
+const choices={};
+for(const j of data.run.junctions||[]){const o=document.createElement('option');o.value=j.node;o.textContent='Node '+j.node;jSelect.append(o);choices[j.node]=0}
+if(!jSelect.options.length){const o=document.createElement('option');o.textContent='No junctions';jSelect.append(o);jSelect.disabled=true;pSelect.disabled=true}
+function optionsForNode(){
+ pSelect.replaceChildren();
+ const j=(data.run.junctions||[]).find(j=>String(j.node)===jSelect.value);
+ if(!j)return;
+ for(const alt of j.alternatives){const o=document.createElement('option');o.value=alt.rank;o.textContent='#'+alt.rank+' cost '+(alt.cost??'unsupported');pSelect.append(o)}
+ pSelect.value=String(choices[j.node]||0);
+}
+function pathsForChoices(){
+ const links=new Map(),edges=data.run.edges;
+ for(const j of data.run.junctions||[]){
+  const alt=j.alternatives[choices[j.node]||0];
+  for(const [i,k] of alt.pairs){const a=j.ports[i],b=j.ports[k],keyA=a.edge+':'+a.side,keyB=b.edge+':'+b.side;links.set(keyA,keyB);links.set(keyB,keyA)}
+ }
+ const seen=new Set(),paths=[];
+ const ports=edges.flatMap(e=>[e.id+':start',e.id+':end']);
+ function walk(start){
+  let port=start,steps=[],closed=false;
+  while(!seen.has(Number(port.split(':')[0]))){
+   const [idText,side]=port.split(':'),id=Number(idText);seen.add(id);steps.push({edge:id,reversed:side==='end'});
+   const next=links.get(id+':'+(side==='start'?'end':'start'));
+   if(!next)break;
+   if(seen.has(Number(next.split(':')[0]))){closed=next===start;break}
+   port=next;
+  }
+  if(steps.length)paths.push({steps,closed});
+ }
+ for(const p of ports)if(!links.has(p)&&!seen.has(Number(p.split(':')[0])))walk(p);
+ for(const p of ports)if(!seen.has(Number(p.split(':')[0])))walk(p);
+ return paths;
+}
+function renderPaths(){
+ trajectorySvg.replaceChildren();
+ const paths=pathsForChoices();
+ for(const [idx,path] of paths.entries()){
+  let d='';
+  for(const step of path.steps){const e=data.run.edges.find(e=>e.id===step.edge);if(!e)continue;
+   const points=step.reversed?[...e.points].reverse():e.points;
+   d+=points.map((p,i)=>(i===0?'M ':'L ')+p[0]+','+p[1]).join(' ')+' ';
+  }
+  const el=document.createElementNS('http://www.w3.org/2000/svg','path');
+  el.setAttribute('d',d);el.setAttribute('fill','none');el.setAttribute('stroke',palette[idx%palette.length]);
+  el.setAttribute('stroke-width','2.7');el.setAttribute('stroke-linecap','round');
+  const title=document.createElementNS('http://www.w3.org/2000/svg','title');
+  title.textContent='Candidate '+idx+'; '+path.steps.length+' edges; direction unknown';el.append(title);trajectorySvg.append(el);
+ }
+ const j=(data.run.junctions||[]).find(j=>String(j.node)===jSelect.value);
+ document.getElementById('hypothesis').textContent=j?JSON.stringify({node:j.node,selected:j.alternatives[choices[j.node]||0],confidence:j.confidence},null,2):'No junctions';
+ document.getElementById('paths').textContent=JSON.stringify(paths.map((p,i)=>({id:i,edges:p.steps.map(s=>s.edge),closed:p.closed})),null,2);
+ draw();
+}
+jSelect.onchange=()=>{optionsForNode();renderPaths()};
+pSelect.onchange=()=>{choices[Number(jSelect.value)]=Number(pSelect.value);renderPaths()};
+optionsForNode();
 function draw(){
  const name=select.value||'source',src=sources.source,dst=sources[name];
  if(!src?.complete||!dst?.complete)return;
  canvas.width=dst.naturalWidth;canvas.height=dst.naturalHeight;
  ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(src,0,0);
  ctx.globalAlpha=Number(overlay.value)/100;ctx.drawImage(dst,0,0);ctx.globalAlpha=1;
- const show=document.getElementById('nodes').checked && ['graph','skeleton'].includes(name);
+ const show=document.getElementById('nodes').checked && ['graph','skeleton','trajectories'].includes(name);
  graph.style.display=show?'block':'none';document.getElementById('notes').textContent=notes[name];
+ document.getElementById('overlay-svg').style.opacity=name==='trajectories'?'0':'1';
+ document.getElementById('trajectory-svg').style.display=name==='trajectories'?'block':'none';
 }
 select.onchange=draw;overlay.oninput=draw;document.getElementById('nodes').onchange=draw;
 function step(n){select.selectedIndex=(select.selectedIndex+n+stages.length)%stages.length;draw()}
@@ -167,5 +240,5 @@ const distances=data.run.nodes.map(n=>({id:n.id,kind:n.kind,d:Math.hypot(x-n.poi
 document.getElementById('pixel').textContent=JSON.stringify({x,y,nearest_node:distances[0]||null},null,2)};
 const metrics=document.getElementById('metrics');
 for(const [key,val] of Object.entries(data.run.diagnostics)){const d=document.createElement('div');d.className='metric';const label=document.createElement('span');label.textContent=key.replaceAll('_',' ');const value=document.createElement('strong');value.textContent=typeof val==='object'?JSON.stringify(val):String(val);d.append(label,value);metrics.append(d)}
-draw();
+renderPaths();
 </script></body></html>"""
