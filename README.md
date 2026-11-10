@@ -2,7 +2,7 @@
 
 **Recover personal handwriting as an editable, procedural writing model from scanned pages, photographs, or other handwriting samples.**
 
-> Status: research and architecture stage. The repository is initialized; extraction and rendering are not yet implemented.
+> Status: early deterministic **geometry prototype** with a standalone visual debugger. Writer-specific trajectory inference, procedural text synthesis, and font compilation remain future work.
 
 ## Why not just trace characters?
 
@@ -50,7 +50,20 @@ See [architecture](docs/architecture/overview.md), [research](docs/research/land
 
 ## Development
 
-This is currently a documentation-first scaffold. No runtime dependencies, trained models, or dataset downloads are required yet. Initial Python source and tests will be added when Phase 1 begins.
+The first prototype has two runtime dependencies: NumPy and Pillow. In the repository root:
+
+```bash
+python -m pip install -e .
+python examples/make_sample.py
+python -m inkflow_core examples/synthetic-sample.png --out runs/demo
+python -m unittest discover -s tests -v
+```
+
+Open `runs/demo/index.html` in a browser. The standalone inspector embeds its images and graph, so it needs no web server. Select a stage, adjust overlay opacity, toggle graph annotations, inspect pixel/node coordinates, or download the graph JSON. `runs/demo` also contains separate stage PNG files, `graph.svg`, and `run.json` for headless tooling.
+
+Stages: input, grayscale, threshold, cleaned mask, approximate distance transform, components, skeleton, graph, width-aware reconstruction, and reconstruction difference. The CLI also supports `--threshold`, `--min-area`, `--max-side`, and `--invert`. Use `--min-area 1` to preserve tiny isolated marks. Image downscaling defaults to a 1000px longest side; use `--max-side 0` to disable it.
+
+The distance transform is a dependency-light approximation; the candidate graph does **not** recover writing order, direction, pen lifts, historical pressure, or calibrated confidence. Current global thresholding can fail under uneven illumination, and edge width rendering can miss ink at intersections. `ink_iou` measures overlap with cleaned pixels only—not correct trajectory inference. Results are local and ignored by Git; do not commit personal handwriting samples without consent.
 
 ## Privacy and rights
 

@@ -4,10 +4,10 @@ version = "0.0.0"
 description = "Reference research pipeline for procedural handwriting extraction"
 requires-python = ">=3.11"
 readme = "README.md"
-dependencies = []
+dependencies = ["numpy>=1.26", "pillow>=10"]
 
 [project.optional-dependencies]
-vision = ["numpy", "scipy", "opencv-python-headless", "scikit-image", "pillow"]
+vision = ["scipy", "opencv-python-headless", "scikit-image"]
 font = ["fonttools", "ufo2ft"]
 test = ["pytest", "ruff"]
 
