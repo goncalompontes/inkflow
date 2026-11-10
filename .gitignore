@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+dist/
+build/
+*.egg-info/
+
+# JS / Rust (future)
+node_modules/
+target/
+
+# Local writer samples, derived data, large learned models
+data/
+datasets/
+runs/
+checkpoints/
+models/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Editors / systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
+.env
+.env.*
+!.env.example
