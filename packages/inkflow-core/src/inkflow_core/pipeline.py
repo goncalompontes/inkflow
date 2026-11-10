@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageOps
 from .geometry import chamfer_distance, annotate_widths, reconstructed_mask, mask_metrics
+from .trajectories import infer_trajectories
 
 NEIGHBORS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 RING = [(-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1)]
@@ -28,6 +29,8 @@ class Analysis:
     components: list[dict]
     nodes: list[dict]
     edges: list[dict]
+    junctions: list[dict]
+    paths: list[dict]
     threshold: int
     diagnostics: dict
 
@@ -249,14 +252,18 @@ def analyze(source: np.ndarray, gray: np.ndarray, *, threshold: int | None = Non
     nodes, edges = graph_of(skeleton)
     distance = chamfer_distance(cleaned)
     annotate_widths(edges, distance)
+    junctions, paths = infer_trajectories(nodes, edges)
     reconstruction = reconstructed_mask(edges, cleaned.shape)
     metrics = mask_metrics(cleaned, reconstruction)
-    return Analysis(source, gray, mask, cleaned, skeleton, distance, reconstruction, components, nodes, edges, threshold,
+    return Analysis(source, gray, mask, cleaned, skeleton, distance, reconstruction, components, nodes, edges, junctions, paths, threshold,
                     {"dimensions": [int(gray.shape[1]), int(gray.shape[0])],
                      "raw_ink_pixels": int(mask.sum()), "clean_ink_pixels": int(cleaned.sum()),
                      "skeleton_pixels": int(skeleton.sum()), "components": len(components),
                      "removed_components": removed, "nodes": len(nodes), "edges": len(edges),
                      "ambiguous_edges": sum(int(e["ambiguous"]) for e in edges),
+                     "junction_hypotheses": len(junctions),
+                     "alternative_pairings": sum(len(j["alternatives"]) for j in junctions),
+                     "primary_candidate_paths": len(paths),
                      "thinning_iterations": iterations,
                      "distance_algorithm": "approximate 8-connected chamfer transform",
                      "mean_candidate_width_px": round(float(np.mean([e["mean_width_px"] for e in edges])), 2) if edges else 0.0,
